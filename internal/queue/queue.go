@@ -90,6 +90,9 @@ func (w *Worker) Tick(ctx context.Context) error {
 		return err
 	}
 	for _, j := range queued {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err := w.prepare(ctx, j); err != nil {
 			log.Printf("queue %s %s: %v", w.Repo.Name, j.ID, err)
 			w.Store.Log(j.Repo, j.ID, "error", "Merge queue error: "+firstLine(err.Error()))
@@ -281,6 +284,9 @@ func (w *Worker) pass(ctx context.Context, j *store.Job, desc string) error {
 // sendBack hands the job back to its agent with feedback. countsAsTry=false is
 // used for problems that aren't really a failed attempt (e.g. branch not pushed).
 func (w *Worker) sendBack(ctx context.Context, j *store.Job, kind, msg, logText string, countsAsTry bool) error {
+	if err := ctx.Err(); err != nil {
+		return err // shutting down: a git command may have failed only because it was cancelled
+	}
 	if countsAsTry {
 		j.Attempts++
 	}

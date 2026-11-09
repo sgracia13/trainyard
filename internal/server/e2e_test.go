@@ -451,3 +451,16 @@ func TestStatusFailureDoesNotBlock(t *testing.T) {
 		t.Fatalf("no retry comments expected, got %d: %v", n, e.fake.Comments)
 	}
 }
+
+// Found on a live run: stopping the server mid-pass made a cancelled git command
+// look like "branch not pushed". A cancelled pass must leave jobs untouched.
+func TestShutdownDoesNotSendBack(t *testing.T) {
+	e := setup(t)
+	j, ws := e.start("maya", "A", "Agent A")
+	e.edit(ws, "src/login.txt", "line2", "line two")
+	e.submit("maya", j, ws, "a")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = e.srv.TickAll(ctx)
+	e.wantState(j.JobID, store.Queued)
+}
