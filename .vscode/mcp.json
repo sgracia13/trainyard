@@ -1,0 +1,10 @@
+{
+  "servers": {
+    "trainyard": {
+      "type": "stdio",
+      "command": "trainyard",
+      "args": ["mcp", "--dir", "${workspaceFolder}"],
+      "env": { "TRAINYARD_AGENT_TOOL": "copilot" }
+    }
+  }
+}

@@ -1,0 +1,4 @@
+title: Log in
+subtitle: Welcome back
+error: Wrong email or password
+button: Go

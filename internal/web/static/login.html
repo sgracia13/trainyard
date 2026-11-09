@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trainyard</title><link rel="stylesheet" href="/static/style.css"><link rel="icon" href="/static/logo.svg"></head>
+<body><div class="login"><form method="post" action="/login">
+<div class="brand" style="padding:0"><img src="/static/logo.svg" width="64" height="34" alt=""> Trainyard</div>
+<label for="t" style="color:var(--fg2)">Paste your Trainyard token to open the dashboard.</label>
+<input id="t" name="token" type="password" autocomplete="off" placeholder="ty_…" required autofocus>
+<p class="err" id="err" hidden>That token didn't work. Ask your Trainyard admin for a new one.</p>
+<button class="btn" type="submit" style="align-self:flex-start">Open dashboard</button>
+<p class="note">Admins create tokens with <code>trainyard admin add-user NAME</code>.</p>
+</form></div>
+<script>if(location.search.includes('bad=1'))document.getElementById('err').hidden=false</script>
+</body></html>

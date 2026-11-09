@@ -1,0 +1,18 @@
+{
+  "listen": ":7070",
+  "public_url": "http://localhost:7070",
+  "data_dir": "./trainyard-data",
+  "claim_ttl_minutes": 30,
+  "poll_seconds": 15,
+  "github": {
+    "token_env": "TRAINYARD_GITHUB_TOKEN"
+  },
+  "repos": [
+    {
+      "name": "OWNER/REPO",
+      "main": "main",
+      "max_attempts": 3,
+      "quick_check": ""
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+title: Checkout
+total: Total
+button: Pay now
