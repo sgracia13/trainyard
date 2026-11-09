@@ -16,6 +16,8 @@ import (
 type Fake struct {
 	Root    string // folder holding <owner>/<name>.git bare repos
 	TestCmd string // shell command run as CI; exit 0 = pass
+	// StatusErr, if set, is returned by SetStatus (simulates a token without that permission).
+	StatusErr error
 
 	mu       sync.Mutex
 	prs      map[string]*FakePR // repo#n
@@ -74,6 +76,9 @@ func (f *Fake) Comment(_ context.Context, repo string, pr int, body string) erro
 func (f *Fake) SetStatus(_ context.Context, repo, sha, state, desc, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.StatusErr != nil {
+		return f.StatusErr
+	}
 	f.statuses[sha] = [2]string{state, desc}
 	return nil
 }

@@ -210,15 +210,22 @@ func (w *Worker) prepare(ctx context.Context, j *store.Job) error {
 	} else {
 		_ = w.Host.Comment(ctx, j.Repo, num, fmt.Sprintf("Trainyard: attempt %d — re-tested on top of the latest `%s` (%s).", j.Attempts+1, w.Repo.Main, short(sha)))
 	}
-	if err := w.Host.SetStatus(ctx, j.Repo, sha, "pending", "Testing on top of the latest "+w.Repo.Main, w.jobURL(j)); err != nil {
-		return err
-	}
+	w.setStatus(ctx, j, sha, "pending", "Testing on top of the latest "+w.Repo.Main)
 	j.State, j.PR, j.PRURL, j.QueueSHA, j.BaseSHA, j.ChangedFiles = store.Testing, num, url, sha, base, gitops.Lines(changed)
 	if err := w.Store.UpdateJob(j); err != nil {
 		return err
 	}
 	w.Store.Log(j.Repo, j.ID, "testing", fmt.Sprintf("%s: on top of latest %s, tests running (PR #%d)", j.Title, w.Repo.Main, num))
 	return nil
+}
+
+// setStatus posts the "trainyard" commit status. A failure here (e.g. a token
+// without the commit-status permission) is logged but doesn't stop the queue:
+// the job still moves on, and the dashboard and PR comments still say what happened.
+func (w *Worker) setStatus(ctx context.Context, j *store.Job, sha, state, desc string) {
+	if err := w.Host.SetStatus(ctx, j.Repo, sha, state, desc, w.jobURL(j)); err != nil {
+		log.Printf("couldn't set the trainyard status on %s for %s (check the token's \"Commit statuses\" permission): %v", short(sha), j.ID, err)
+	}
 }
 
 func (w *Worker) runQuickCheck(ctx context.Context) (string, error) {
@@ -262,9 +269,7 @@ func (w *Worker) checkTests(ctx context.Context, j *store.Job) error {
 }
 
 func (w *Worker) pass(ctx context.Context, j *store.Job, desc string) error {
-	if err := w.Host.SetStatus(ctx, j.Repo, j.QueueSHA, "success", desc, w.jobURL(j)); err != nil {
-		return err
-	}
+	w.setStatus(ctx, j, j.QueueSHA, "success", desc)
 	j.State = store.Ready
 	if err := w.Store.UpdateJob(j); err != nil {
 		return err
@@ -290,9 +295,7 @@ func (w *Worker) sendBack(ctx context.Context, j *store.Job, kind, msg, logText 
 		return err
 	}
 	if j.QueueSHA != "" && j.State != store.Working {
-		if err := w.Host.SetStatus(ctx, j.Repo, j.QueueSHA, "failure", desc, w.jobURL(j)); err != nil {
-			log.Printf("status %s: %v", j.ID, err)
-		}
+		w.setStatus(ctx, j, j.QueueSHA, "failure", desc)
 	}
 	if j.PR > 0 && countsAsTry {
 		body := "Trainyard: " + desc + ".\n\n" + msg

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"errors"
 	"context"
 	"encoding/json"
 	"io"
@@ -433,5 +434,20 @@ func TestMCP(t *testing.T) {
 	j := e.job("j1")
 	if j.Agent != "Agent M" || j.AgentTool != "copilot-test" {
 		t.Fatalf("agent identity: %+v", j)
+	}
+}
+
+// A token that can't post commit statuses must not stall the queue (seen on a live run).
+func TestStatusFailureDoesNotBlock(t *testing.T) {
+	e := setup(t)
+	e.fake.StatusErr = errors.New("HTTP 403: not permitted")
+	j, ws := e.start("maya", "A", "Agent A")
+	e.edit(ws, "src/login.txt", "line2", "line two")
+	e.submit("maya", j, ws, "a")
+	e.tick()
+	e.wantState(j.JobID, store.Ready)
+	e.tick()
+	if n := len(e.fake.Comments); n != 0 {
+		t.Fatalf("no retry comments expected, got %d: %v", n, e.fake.Comments)
 	}
 }
