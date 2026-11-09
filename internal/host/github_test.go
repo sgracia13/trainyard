@@ -51,7 +51,12 @@ func fakeGitHub(t *testing.T) (*httptest.Server, *[]string) {
 		case p == "/repos/acme/shop/actions/jobs/11/logs":
 			http.Redirect(w, r, srv.URL+"/blob/log", http.StatusFound)
 		case p == "/blob/log":
-			fmt.Fprint(w, "2026-11-09T10:00:00.0000000Z setup\n2026-11-09T10:00:01.0000000Z FAIL refund.spec.ts\n")
+			fmt.Fprint(w, "\ufeff2026-11-09T10:00:00.0000000Z Current runner version: '2.338.2'\r\n"+
+				"2026-11-09T10:00:00.1Z ##[group]Run actions/checkout@v4\n2026-11-09T10:00:00.2Z with:\n2026-11-09T10:00:00.3Z ##[endgroup]\n"+
+				"2026-11-09T10:00:00.4Z checkout noise\n"+
+				"2026-11-09T10:00:01.0Z ##[group]Run npm test\n2026-11-09T10:00:01.1Z \x1b[36;1mnpm test\x1b[0m\n2026-11-09T10:00:01.2Z shell: bash\n2026-11-09T10:00:01.3Z ##[endgroup]\n"+
+				"2026-11-09T10:00:02.0Z FAIL refund.spec.ts\n2026-11-09T10:00:02.1Z ##[error]Process completed with exit code 1.\n"+
+				"2026-11-09T10:00:03.0Z Post job cleanup.\n")
 		case p == "/repos/acme/shop/pulls/7":
 			w.Write([]byte(`{"number":7,"state":"closed","merged":true}`))
 		default:
@@ -89,7 +94,7 @@ func TestGitHub(t *testing.T) {
 	if res.State != ChecksFailure || res.Total != 3 || len(res.Failed) != 1 || res.Failed[0].Name != "unit" {
 		t.Fatalf("checks: %+v", res)
 	}
-	if res.Failed[0].Log != "setup\nFAIL refund.spec.ts" {
+	if res.Failed[0].Log != "$ npm test\nFAIL refund.spec.ts\nProcess completed with exit code 1." {
 		t.Fatalf("log: %q", res.Failed[0].Log)
 	}
 	st, err := g.PRState(ctx, "acme/shop", 7)

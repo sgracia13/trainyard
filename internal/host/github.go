@@ -234,7 +234,50 @@ func (g *GitHub) actionsLog(ctx context.Context, repo string, jobID int64) strin
 		return ""
 	}
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-	return TailLog(string(data), 150)
+	return FocusLog(string(data))
+}
+
+var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// FocusLog keeps the part of a GitHub Actions log an agent needs: the step that
+// failed, from its "Run ..." line to the error, without runner setup noise.
+func FocusLog(s string) string {
+	lines := strings.Split(strings.TrimPrefix(strings.ReplaceAll(s, "\r", ""), "\ufeff"), "\n")
+	for i, l := range lines {
+		lines[i] = ansi.ReplaceAllString(tsPrefix.ReplaceAllString(l, ""), "")
+	}
+	errAt := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.HasPrefix(lines[i], "##[error]") {
+			errAt = i
+			break
+		}
+	}
+	if errAt < 0 {
+		return TailLog(strings.Join(lines, "\n"), 80)
+	}
+	start := 0
+	for i := errAt; i >= 0; i-- {
+		if strings.HasPrefix(lines[i], "##[group]Run ") {
+			start = i
+			break
+		}
+	}
+	var out []string
+	inGroup := false
+	for _, l := range lines[start : errAt+1] {
+		switch {
+		case strings.HasPrefix(l, "##[group]"):
+			out = append(out, "$ "+strings.TrimPrefix(strings.TrimPrefix(l, "##[group]"), "Run "))
+			inGroup = true // the group body is the step's settings (shell, env): skip it
+		case strings.HasPrefix(l, "##[endgroup]"):
+			inGroup = false
+		case inGroup:
+		default:
+			out = append(out, strings.TrimPrefix(l, "##[error]"))
+		}
+	}
+	return TailLog(strings.Join(out, "\n"), 150)
 }
 
 // TailLog keeps the last n lines and strips GitHub's per-line timestamps.
