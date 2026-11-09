@@ -70,3 +70,4 @@ pre{background:#050505;border:1px solid var(--line);padding:12px;overflow:auto;m
 .login input{background:var(--panel);border:2px solid var(--line2);color:#fff;padding:12px;font:14px var(--mono)}
 .login .err{color:var(--red)}
 @media (max-width:900px){.app{grid-template-columns:1fr}.side{position:static;height:auto;flex-direction:row;flex-wrap:wrap}.side .foot{display:none}main{padding:24px 16px}.tiles,.route{grid-template-columns:1fr 1fr}h1{font-size:38px}}
+.nav .n[hidden]{display:none}

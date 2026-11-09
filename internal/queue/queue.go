@@ -291,7 +291,10 @@ func (w *Worker) sendBack(ctx context.Context, j *store.Job, kind, msg, logText 
 		j.Attempts++
 	}
 	j.State = store.SentBack
-	desc := fmt.Sprintf("Sent back to %s (try %d of %d)", j.Agent, j.Attempts, w.Repo.MaxAttempts)
+	desc := "Sent back to " + j.Agent
+	if countsAsTry {
+		desc = fmt.Sprintf("Sent back to %s (try %d of %d)", j.Agent, j.Attempts, w.Repo.MaxAttempts)
+	}
 	if countsAsTry && j.Attempts >= w.Repo.MaxAttempts {
 		j.State = store.NeedsPerson
 		desc = fmt.Sprintf("Failed %d times; needs a person", j.Attempts)
