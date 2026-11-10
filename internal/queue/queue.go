@@ -51,7 +51,7 @@ func (r *RepoConfig) Defaults() {
 }
 
 type Worker struct {
-	mu sync.Mutex // one git operation at a time in the working clone
+	mu        sync.Mutex // one git operation at a time in the working clone
 	Repo      RepoConfig
 	Store     *store.Store
 	Host      host.Host

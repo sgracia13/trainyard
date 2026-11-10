@@ -29,7 +29,9 @@ const PortFirst, PortLast = 3001, 3099
 
 var ErrNoJob = errors.New("this folder isn't a Trainyard workspace: run `trainyard start \"what to do\"` first, or cd into a job's folder")
 
-func git(dir string, args ...string) (string, error) { return gitops.Run(context.Background(), dir, args...) }
+func git(dir string, args ...string) (string, error) {
+	return gitops.Run(context.Background(), dir, args...)
+}
 
 // FindJob walks up from dir looking for .trainyard/job.json.
 func FindJob(dir string) (*JobFile, string, error) {

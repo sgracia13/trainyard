@@ -18,17 +18,17 @@ type JobView struct {
 }
 
 type OverlapPair struct {
-	Repo    string `json:"repo"`
-	A       string `json:"a"`
-	B       string `json:"b"`
-	AgentA  string `json:"agent_a"`
-	AgentB  string `json:"agent_b"`
-	Pattern string `json:"pattern"`
+	Repo    string    `json:"repo"`
+	A       string    `json:"a"`
+	B       string    `json:"b"`
+	AgentA  string    `json:"agent_a"`
+	AgentB  string    `json:"agent_b"`
+	Pattern string    `json:"pattern"`
 	Since   time.Time `json:"since"`
 	// Result of trial-merging both jobs' latest work: "", "clean" or "conflict".
-	Lines      string   `json:"lines"`
-	LineFiles  []string `json:"line_files"`
-	LinesAt    time.Time `json:"lines_at"`
+	Lines     string    `json:"lines"`
+	LineFiles []string  `json:"line_files"`
+	LinesAt   time.Time `json:"lines_at"`
 }
 
 type State struct {

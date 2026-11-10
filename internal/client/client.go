@@ -181,7 +181,9 @@ func (c *Client) Feedback(job string) (*FeedbackResult, error) {
 	return &r, err
 }
 
-func (c *Client) Abandon(job string) error { return c.Do("POST", "/api/jobs/"+job+"/abandon", nil, nil) }
+func (c *Client) Abandon(job string) error {
+	return c.Do("POST", "/api/jobs/"+job+"/abandon", nil, nil)
+}
 
 func (c *Client) Claims(repo string) ([]store.Claim, error) {
 	var r []store.Claim

@@ -2,9 +2,9 @@ package server
 
 import (
 	"bufio"
-	"errors"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,14 +29,14 @@ import (
 const repo = "acme/shop"
 
 type env struct {
-	t       *testing.T
-	ctx     context.Context
-	root    string
-	fake    *host.Fake
-	srv     *Server
-	url     string
-	tokens  map[string]string
-	clones  map[string]string
+	t      *testing.T
+	ctx    context.Context
+	root   string
+	fake   *host.Fake
+	srv    *Server
+	url    string
+	tokens map[string]string
+	clones map[string]string
 }
 
 // Saved before tests point HOME at a temp folder, so `go build` still finds its caches.

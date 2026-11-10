@@ -16,10 +16,10 @@ import (
 // GitHub implements Host with the GitHub REST API and a token
 // (a fine-grained personal access token for now; a GitHub App later).
 type GitHub struct {
-	APIURL string // https://api.github.com, or https://HOST/api/v3 for GitHub Enterprise Server
+	APIURL  string // https://api.github.com, or https://HOST/api/v3 for GitHub Enterprise Server
 	WebBase string // https://github.com
-	Token  string
-	HTTP   *http.Client
+	Token   string
+	HTTP    *http.Client
 }
 
 func NewGitHub(apiURL, webBase, token string) *GitHub {

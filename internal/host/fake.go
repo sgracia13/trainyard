@@ -19,11 +19,11 @@ type Fake struct {
 	// StatusErr, if set, is returned by SetStatus (simulates a token without that permission).
 	StatusErr error
 
-	mu       sync.Mutex
-	prs      map[string]*FakePR // repo#n
-	nextPR   int
-	statuses map[string][2]string // sha -> state, description
-	results  map[string]CheckResult
+	mu        sync.Mutex
+	prs       map[string]*FakePR // repo#n
+	nextPR    int
+	statuses  map[string][2]string // sha -> state, description
+	results   map[string]CheckResult
 	Comments  []string
 	Summaries map[string]string // repo#n -> latest summary comment
 	Edits     int               // how many times a summary was edited in place
