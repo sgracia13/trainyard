@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" viewBox="0 0 960 300" role="img" aria-label="How Trainyard works: start and claim, check in, merge queue, review and land">
+<text x="20" y="34" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="15" fill="#555555">AGENTS ON EACH LAPTOP</text>
+<text x="940" y="34" text-anchor="end" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="15" fill="#555555">MAIN STAYS GREEN</text>
+<rect x="40" y="86" width="880" height="10" fill="#000000"/>
+<path d="M920 76 l24 15 l-24 15 z" fill="#000000"/>
+<circle cx="110" cy="91" r="30" fill="#0039A6" stroke="#000000" stroke-width="5"/>
+<text x="110" y="102" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="30" font-weight="700" fill="#fff">1</text>
+<text x="110" y="160" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="21" font-weight="700" fill="#000000">Start and claim</text>
+<text x="110" y="192" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="16" fill="#555555">Own folder and branch</text>
+<text x="110" y="216" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="16" fill="#555555">per job. Agents claim</text>
+<text x="110" y="240" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="16" fill="#555555">files before editing.</text>
+<circle cx="357" cy="91" r="30" fill="#EE352E" stroke="#000000" stroke-width="5"/>
+<text x="357" y="102" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="30" font-weight="700" fill="#fff">2</text>
+<text x="357" y="160" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="21" font-weight="700" fill="#000000">Check in</text>
+<text x="357" y="192" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="16" fill="#555555">Real edits are claimed</text>
+<text x="357" y="216" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="16" fill="#555555">automatically and checked</text>
+<text x="357" y="240" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="16" fill="#555555">line by line vs others.</text>
+<circle cx="604" cy="91" r="30" fill="#00A650" stroke="#000000" stroke-width="5"/>
+<text x="604" y="102" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="30" font-weight="700" fill="#000">3</text>
+<text x="604" y="160" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="21" font-weight="700" fill="#000000">Merge queue</text>
+<text x="604" y="192" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="16" fill="#555555">Rebased on latest main,</text>
+<text x="604" y="216" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="16" fill="#555555">your CI runs. Failures go</text>
+<text x="604" y="240" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="16" fill="#555555">back with the log.</text>
+<circle cx="851" cy="91" r="30" fill="#FCCC0A" stroke="#000000" stroke-width="5"/>
+<text x="851" y="102" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="30" font-weight="700" fill="#000">4</text>
+<text x="851" y="160" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="21" font-weight="700" fill="#000000">Review and land</text>
+<text x="851" y="192" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="16" fill="#555555">Only passing work reaches</text>
+<text x="851" y="216" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="16" fill="#555555">review. One PR comment</text>
+<text x="851" y="240" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="16" fill="#555555">tracks it. Claims released.</text>
+</svg>
