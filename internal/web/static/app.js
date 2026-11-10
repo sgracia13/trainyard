@@ -90,7 +90,7 @@ function needsYou() {
       <div class="act">${prBtn(j, "Review on GitHub", "blue")}</div></div>`);
   for (const o of S.overlaps)
     rows.push(`<div class="row"><span class="ic" style="background:#2a2200;color:var(--yellow)">${icon("flag", 18)}</span>
-      <div><div class="t">${esc(o.agent_a)} and ${esc(o.agent_b)} both claimed ${esc(o.pattern)}</div><div class="d">Both agents were told · nobody is blocked · ${ago(o.since)}</div></div>
+      <div><div class="t">${o.lines === "conflict" ? `${esc(o.agent_a)} and ${esc(o.agent_b)} will conflict in ${esc(o.line_files.join(", "))}` : `${esc(o.agent_a)} and ${esc(o.agent_b)} are both working on ${esc(o.pattern)}`}</div><div class="d">${lineNote(o)} · both agents told · ${ago(o.since)}</div></div>
       <div class="act"><button class="btn" onclick="setTab('claims')">See claims</button></div></div>`);
   for (const j of S.jobs.filter(j => j.state === "needs_person"))
     rows.push(`<div class="row"><span class="ic" style="background:#2a0b0a;color:var(--red)">${icon("x", 18)}</span>
@@ -130,19 +130,26 @@ function home() {
     : `<div class="list"><div class="empty">Nothing has landed yet today.</div></div>`}`;
 }
 
+function lineNote(o) {
+  if (o.lines === "conflict") return `<span style="color:#ff6b63">Same lines changed: conflict predicted</span>`;
+  if (o.lines === "clean") return `<span style="color:#5fe08f">Line check: different lines, merges cleanly</span>`;
+  return "Line check runs when they next check in";
+}
+
 function claims() {
   const overlaps = S.overlaps.map(o => {
     const a = jobById(o.a) || {}, b = jobById(o.b) || {};
-    return `<div class="callout"><span class="pill p-overlap">${icon("alert", 13)}Overlap</span> <span class="sub" style="color:var(--fg3)">${ago(o.since)} · nobody is blocked</span>
+    return `<div class="callout" style="${o.lines === "conflict" ? "border-color:var(--red);background:#1a0605" : o.lines === "clean" ? "border-color:#3a3a3a;background:var(--panel)" : ""}">${o.lines === "conflict" ? pill("needs_person", "Conflict predicted") : o.lines === "clean" ? `<span class="pill p-ready">${icon("check", 13)}Same file, different lines</span>` : `<span class="pill p-overlap">${icon("alert", 13)}Overlap</span>`} <span class="sub" style="color:var(--fg3)">${ago(o.since)} · nobody is blocked</span>
       <div class="t">${esc(o.agent_a)} and ${esc(o.agent_b)} both claimed <code>${esc(o.pattern)}</code></div>
       <div class="d" style="color:var(--fg2);margin-top:6px">${esc(o.agent_a)}: “${esc(a.title)}” (${esc(a.started_by)}) · ${esc(o.agent_b)}: “${esc(b.title)}” (${esc(b.started_by)})</div>
+      <div class="d" style="margin-top:8px">${lineNote(o)}${o.lines ? " · checked " + ago(o.lines_at) : ""}</div>
       <div class="note">Both agents were told. Whichever lands second is re-tested on top of the first automatically.</div></div>`;
   }).join("");
-  const rows = S.claims.map(c => `<tr><td class="mono">${esc(c.pattern)}</td><td><b>${esc(c.agent)}</b><div class="sub">${esc(c.started_by)}</div></td>
+  const rows = S.claims.map(c => `<tr><td class="mono">${esc(c.pattern)}${c.source === "detected" ? `<div class="sub" style="font-family:var(--font)">detected from edits, not claimed</div>` : ""}</td><td><b>${esc(c.agent)}</b><div class="sub">${esc(c.started_by)}</div></td>
     <td>${esc(c.job_title)}<div class="sub">${esc(c.job_id)}${c.reason ? " · “" + esc(c.reason) + "”" : ""}</div></td><td class="sub">${ago(c.created_at)}</td>
     <td>${S.overlaps.some(o => o.a === c.job_id || o.b === c.job_id) ? pill("overlap", "Overlap") : `<span class="pill p-ready">${icon("check", 13)}Clear</span>`}</td></tr>`).join("");
   return `<div class="crumb">${repoCrumb()} › Claims</div><h1>Claims</h1>
-  <p class="lede">Before editing, each agent says which files it plans to change. Claims are a heads-up, not a lock. They’re released when work lands, or after ${S.claim_ttl_minutes} quiet minutes.</p>
+  <p class="lede">Before editing, each agent says which files it plans to change, and Trainyard also watches what agents actually edit. Overlaps are checked line by line. Claims are a heads-up, not a lock. They’re released when work lands, or after ${S.claim_ttl_minutes} quiet minutes.</p>
   ${overlaps}
   <h2><span class="bullet">1</span>Active claims</h2>
   ${rows ? `<table><thead><tr><th>Files</th><th>Agent</th><th>Job</th><th>Claimed</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="list"><div class="empty">No active claims.</div></div>`}`;

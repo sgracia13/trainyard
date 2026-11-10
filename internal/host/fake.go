@@ -24,7 +24,9 @@ type Fake struct {
 	nextPR   int
 	statuses map[string][2]string // sha -> state, description
 	results  map[string]CheckResult
-	Comments []string
+	Comments  []string
+	Summaries map[string]string // repo#n -> latest summary comment
+	Edits     int               // how many times a summary was edited in place
 }
 
 type FakePR struct {
@@ -71,6 +73,25 @@ func (f *Fake) Comment(_ context.Context, repo string, pr int, body string) erro
 	defer f.mu.Unlock()
 	f.Comments = append(f.Comments, fmt.Sprintf("%s#%d: %s", repo, pr, body))
 	return nil
+}
+
+func (f *Fake) UpsertComment(_ context.Context, repo string, pr int, marker, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Summaries == nil {
+		f.Summaries = map[string]string{}
+	}
+	if _, ok := f.Summaries[key(repo, pr)]; ok {
+		f.Edits++
+	}
+	f.Summaries[key(repo, pr)] = body
+	return nil
+}
+
+func (f *Fake) Summary(repo string, pr int) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.Summaries[key(repo, pr)]
 }
 
 func (f *Fake) SetStatus(_ context.Context, repo, sha, state, desc, _ string) error {

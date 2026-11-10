@@ -38,6 +38,9 @@ type Host interface {
 	EnsurePR(ctx context.Context, repo, head, base, title, body string) (number int, url string, created bool, err error)
 	AddLabels(ctx context.Context, repo string, pr int, labels []string) error
 	Comment(ctx context.Context, repo string, pr int, body string) error
+	// UpsertComment edits the PR comment containing marker, or adds it. Trainyard keeps
+	// one summary comment per PR up to date instead of adding a new one each time.
+	UpsertComment(ctx context.Context, repo string, pr int, marker, body string) error
 	// SetStatus posts the required "trainyard" commit status.
 	SetStatus(ctx context.Context, repo, sha, state, description, targetURL string) error
 	// Checks summarises CI results for a commit.

@@ -120,6 +120,22 @@ func (g *GitHub) Comment(ctx context.Context, repo string, pr int, body string) 
 	return g.do(ctx, "POST", fmt.Sprintf("/repos/%s/issues/%d/comments", repo, pr), map[string]any{"body": body}, nil)
 }
 
+func (g *GitHub) UpsertComment(ctx context.Context, repo string, pr int, marker, body string) error {
+	var list []struct {
+		ID   int64  `json:"id"`
+		Body string `json:"body"`
+	}
+	if err := g.do(ctx, "GET", fmt.Sprintf("/repos/%s/issues/%d/comments?per_page=100", repo, pr), nil, &list); err != nil {
+		return err
+	}
+	for _, c := range list {
+		if strings.Contains(c.Body, marker) {
+			return g.do(ctx, "PATCH", fmt.Sprintf("/repos/%s/issues/comments/%d", repo, c.ID), map[string]any{"body": body}, nil)
+		}
+	}
+	return g.Comment(ctx, repo, pr, body)
+}
+
 func (g *GitHub) SetStatus(ctx context.Context, repo, sha, state, desc, target string) error {
 	if len(desc) > 140 { // GitHub's limit
 		desc = desc[:137] + "..."

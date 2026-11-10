@@ -279,56 +279,103 @@ func (s *Server) claim(w http.ResponseWriter, r *http.Request, u *store.User) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	active, err := s.Store.ActiveClaims(j.Repo)
+	claimed, overlaps, err := s.addClaims(j, req.Patterns, req.Reason, "claimed")
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	mine := map[string]bool{}
+	_ = s.Store.Heartbeat(j.ID, req.Reason)
+	writeJSON(w, 200, map[string]any{"claimed": claimed, "overlaps": overlaps})
+}
+
+// addClaims records claims for a job and tells every other agent whose claims overlap.
+// source is "claimed" (the agent said so) or "detected" (Trainyard saw the edits).
+// Patterns already covered by one of the job's claims are skipped. Callers hold s.mu.
+func (s *Server) addClaims(j *store.Job, patterns []string, reason, source string) ([]string, []Overlap, error) {
+	active, err := s.Store.ActiveClaims(j.Repo)
+	if err != nil {
+		return nil, nil, err
+	}
+	var mine []string
 	for _, c := range active {
 		if c.JobID == j.ID {
-			mine[c.Pattern] = true
+			mine = append(mine, c.Pattern)
 		}
+	}
+	covered := func(p string) bool {
+		for _, m := range mine {
+			if m == p || (source == "detected" && claims.Match(m, p)) {
+				return true
+			}
+		}
+		return false
 	}
 	var claimed []string
 	overlaps := []Overlap{}
-	for _, p := range req.Patterns {
+	for _, p := range patterns {
 		p = claims.Normalize(p)
+		if covered(p) {
+			if source == "claimed" { // re-claiming: still report overlaps
+				for _, c := range active {
+					if c.JobID != j.ID && claims.Overlap(p, c.Pattern) {
+						overlaps = append(overlaps, Overlap{p, c.Pattern, c.JobID, c.Agent, c.StartedBy, c.JobTitle})
+					}
+				}
+			}
+			continue
+		}
 		for _, c := range active {
 			if c.JobID != j.ID && claims.Overlap(p, c.Pattern) {
 				overlaps = append(overlaps, Overlap{p, c.Pattern, c.JobID, c.Agent, c.StartedBy, c.JobTitle})
 			}
 		}
-		if mine[p] {
-			continue
-		}
-		mine[p] = true
-		if err := s.Store.AddClaim(&store.Claim{JobID: j.ID, Repo: j.Repo, Pattern: p, Reason: req.Reason}); err != nil {
-			writeErr(w, 500, err.Error())
-			return
+		mine = append(mine, p)
+		if err := s.Store.AddClaim(&store.Claim{JobID: j.ID, Repo: j.Repo, Pattern: p, Reason: reason, Source: source}); err != nil {
+			return nil, nil, err
 		}
 		claimed = append(claimed, p)
 	}
-	_ = s.Store.Heartbeat(j.ID, req.Reason)
+	verb := "claimed"
+	if source == "detected" {
+		verb = "is editing (detected, not claimed)"
+	}
 	if len(claimed) > 0 {
-		s.Store.Log(j.Repo, j.ID, "claimed", fmt.Sprintf("%s claimed %s", j.Agent, strings.Join(claimed, ", ")))
+		s.Store.Log(j.Repo, j.ID, "claimed", fmt.Sprintf("%s %s %s", j.Agent, verb, strings.Join(claimed, ", ")))
 	}
 	told := map[string]bool{}
 	for _, o := range overlaps {
-		if told[o.OtherJob] {
-			continue
+		if told[o.OtherJob] || !contains(claimed, o.Pattern) {
+			continue // only announce overlaps that are new
 		}
 		told[o.OtherJob] = true
 		why := ""
-		if req.Reason != "" {
-			why = fmt.Sprintf(" (%q)", req.Reason)
+		if reason != "" {
+			why = fmt.Sprintf(" (%q)", reason)
+		}
+		action := "just claimed"
+		if source == "detected" {
+			action = "is editing"
 		}
 		_ = s.Store.AddFeedback(&store.Feedback{JobID: o.OtherJob, Kind: "overlap",
-			Message: fmt.Sprintf("Heads-up: %s (%s, job %s: %s) just claimed %s, which overlaps your claim on %s%s. Coordinate: avoid changing the same lines, and expect a re-test if theirs lands first.",
-				j.Agent, j.StartedBy, j.ID, j.Title, o.Pattern, o.OtherPattern, why)})
-		s.Store.Log(j.Repo, j.ID, "overlap", fmt.Sprintf("%s and %s both claimed %s — both agents told", j.Agent, o.OtherAgent, o.Pattern))
+			Message: fmt.Sprintf("Heads-up: %s (%s, job %s: %s) %s %s, which overlaps your claim on %s%s. Coordinate: avoid changing the same lines, and expect a re-test if theirs lands first.",
+				j.Agent, j.StartedBy, j.ID, j.Title, action, o.Pattern, o.OtherPattern, why)})
+		if source == "detected" {
+			_ = s.Store.AddFeedback(&store.Feedback{JobID: j.ID, Kind: "overlap",
+				Message: fmt.Sprintf("Heads-up: you're editing %s without claiming it, and it overlaps %s's claim on %s (%s, job %s: %s). Trainyard claimed it for you; both agents have been told.",
+					o.Pattern, o.OtherAgent, o.OtherPattern, o.OtherPerson, o.OtherJob, o.OtherTitle)})
+		}
+		s.Store.Log(j.Repo, j.ID, "overlap", fmt.Sprintf("%s and %s are both working on %s — both agents told", j.Agent, o.OtherAgent, o.Pattern))
 	}
-	writeJSON(w, 200, map[string]any{"claimed": claimed, "overlaps": overlaps})
+	return claimed, overlaps, nil
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) release(w http.ResponseWriter, r *http.Request, u *store.User) {
@@ -354,20 +401,142 @@ func (s *Server) release(w http.ResponseWriter, r *http.Request, u *store.User) 
 	writeJSON(w, 200, map[string]any{"released": n})
 }
 
+// heartbeat keeps claims alive. When the CLI or agent tools send the files actually
+// changed and a snapshot of the work, Trainyard also claims anything the agent forgot
+// to claim, and trial-merges the snapshot with overlapping jobs to predict conflicts.
 func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request, u *store.User) {
 	j := s.jobFor(w, r, u)
 	if j == nil {
 		return
 	}
 	var req struct {
-		Note string `json:"note"`
+		Note   string   `json:"note"`
+		Files  []string `json:"files"`
+		WipSHA string   `json:"wip_sha"`
 	}
 	_ = readJSON(r, &req)
 	if err := s.Store.Heartbeat(j.ID, req.Note); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "state": j.State})
+	resp := map[string]any{"ok": true, "state": j.State, "detected": []string{}, "overlaps": []Overlap{}, "line_checks": []LineResult{}}
+	active := j.State == store.Working || j.State == store.SentBack
+	if !active || (len(req.Files) == 0 && req.WipSHA == "") {
+		writeJSON(w, 200, resp)
+		return
+	}
+	s.mu.Lock()
+	detected, overlaps, err := s.addClaims(j, req.Files, "", "detected")
+	if err == nil && req.WipSHA != "" {
+		j, err = s.Store.Job(j.ID)
+		if err == nil {
+			j.WipSHA, j.ChangedFiles = req.WipSHA, req.Files
+			err = s.Store.UpdateJob(j)
+		}
+	}
+	s.mu.Unlock()
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	if detected != nil {
+		resp["detected"] = detected
+	}
+	resp["overlaps"] = overlaps
+	resp["line_checks"] = s.checkLines(r.Context(), j)
+	writeJSON(w, 200, resp)
+}
+
+// LineResult says whether two jobs' work would merge cleanly.
+type LineResult struct {
+	OtherJob   string   `json:"other_job"`
+	OtherAgent string   `json:"other_agent"`
+	Conflict   bool     `json:"conflict"`
+	Files      []string `json:"files"`
+	Changed    bool     `json:"changed"` // result differs from the last check
+}
+
+// latestSHA is the newest version of a job's work Trainyard knows about.
+func latestSHA(j *store.Job) string {
+	switch j.State {
+	case store.Working, store.SentBack:
+		if j.WipSHA != "" {
+			return j.WipSHA
+		}
+	case store.Queued, store.Testing, store.Ready, store.NeedsPerson:
+		return j.QueueSHA
+	}
+	return ""
+}
+
+// checkLines trial-merges a job's latest work with every open job it overlaps.
+func (s *Server) checkLines(ctx context.Context, j *store.Job) []LineResult {
+	out := []LineResult{}
+	w := s.workers[j.Repo]
+	mySHA := latestSHA(j)
+	if w == nil || mySHA == "" {
+		return out
+	}
+	active, _ := s.Store.ActiveClaims(j.Repo)
+	others, _ := s.Store.JobsInState(j.Repo, store.Working, store.SentBack, store.Queued, store.Testing, store.Ready, store.NeedsPerson)
+	patterns := func(job *store.Job) []string {
+		p := append([]string{}, job.ChangedFiles...)
+		for _, c := range active {
+			if c.JobID == job.ID {
+				p = append(p, c.Pattern)
+			}
+		}
+		return p
+	}
+	mine := patterns(j)
+	for _, o := range others {
+		if o.ID == j.ID {
+			continue
+		}
+		theirSHA := latestSHA(o)
+		if theirSHA == "" || !anyOverlap(mine, patterns(o)) {
+			continue
+		}
+		prev, _ := s.Store.GetLineCheck(j.ID, o.ID)
+		if prev != nil && ((prev.A == j.ID && prev.ShaA == mySHA && prev.ShaB == theirSHA) || (prev.B == j.ID && prev.ShaB == mySHA && prev.ShaA == theirSHA)) {
+			out = append(out, LineResult{o.ID, o.Agent, prev.Conflict, prev.Files, false})
+			continue
+		}
+		conflict, files, err := w.TrialMerge(ctx, mySHA, theirSHA)
+		if err != nil {
+			log.Printf("line check %s vs %s: %v", j.ID, o.ID, err)
+			continue
+		}
+		_ = s.Store.PutLineCheck(j.ID, o.ID, mySHA, theirSHA, conflict, files)
+		changed := prev == nil || prev.Conflict != conflict
+		out = append(out, LineResult{o.ID, o.Agent, conflict, files, changed})
+		if !changed {
+			continue
+		}
+		if conflict {
+			msg := func(other *store.Job) string {
+				return fmt.Sprintf("Conflict ahead: your edits and %s's (%s, job %s: %s) change the same lines in %s. One of you will have to redo work when the other lands. Coordinate now: agree who goes first, or split the change.",
+					other.Agent, other.StartedBy, other.ID, other.Title, strings.Join(files, ", "))
+			}
+			_ = s.Store.AddFeedback(&store.Feedback{JobID: j.ID, Kind: "conflict_ahead", Message: msg(o)})
+			_ = s.Store.AddFeedback(&store.Feedback{JobID: o.ID, Kind: "conflict_ahead", Message: msg(j)})
+			s.Store.Log(j.Repo, j.ID, "conflict_ahead", fmt.Sprintf("%s and %s change the same lines in %s — conflict predicted, both told", j.Agent, o.Agent, strings.Join(files, ", ")))
+		} else {
+			s.Store.Log(j.Repo, j.ID, "lines_clear", fmt.Sprintf("Line check: %s and %s touch the same files but not the same lines — they'll merge cleanly", j.Agent, o.Agent))
+		}
+	}
+	return out
+}
+
+func anyOverlap(a, b []string) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if claims.Overlap(x, y) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Server) submit(w http.ResponseWriter, r *http.Request, u *store.User) {

@@ -17,7 +17,7 @@ import (
 
 const Instructions = `Trainyard coordinates AI agents working on the same repo.
 Workflow: start_job (once) -> work only inside the workspace folder it returns -> claim the files you will change before editing them ->
-heartbeat every few minutes on long tasks -> submit when done -> get_feedback until the job lands.
+heartbeat after editing files (Trainyard then checks your actual edits against other agents', line by line) -> submit when done -> get_feedback until the job lands.
 If submit is sent back, fix what the feedback says in the same workspace and submit again. Claims are a heads-up, not a lock: if claim
 reports an overlap, avoid changing the same lines as the other agent.`
 
@@ -148,7 +148,7 @@ var toolDefs = []map[string]any{
 	{"name": "claim", "description": "Tell Trainyard which files or folders you are about to change, BEFORE editing them. Returns any overlap with other agents' claims. Claims are a heads-up, not a lock.",
 		"inputSchema": schema(map[string]any{"files": strList("Repo-relative paths or globs, e.g. ['src/auth/LoginPage.tsx', 'src/auth/*']"),
 			"reason": str("One line on what you're changing, shown to other agents"), "workspace": wsProp}, "files")},
-	{"name": "heartbeat", "description": "Check in during long tasks (every few minutes) so your claims don't expire. Optionally say what you're doing.",
+	{"name": "heartbeat", "description": "Check in after editing files and every few minutes on long tasks. Trainyard looks at what you actually changed, claims any files you forgot to claim, and checks line by line whether your edits will conflict with another agent's. Optionally say what you're doing.",
 		"inputSchema": schema(map[string]any{"note": str("What you're doing right now"), "workspace": wsProp})},
 	{"name": "submit", "description": "Finish your work: commits any uncommitted changes, pushes your branch and puts it in the merge queue, where it's tested on top of the latest main. Then call get_feedback to see the result.",
 		"inputSchema": schema(map[string]any{"summary": str("What you changed and why, for reviewers. Also used as the commit message for uncommitted changes."), "workspace": wsProp}, "summary")},
@@ -233,10 +233,7 @@ func (s *Server) call(name string, a map[string]any) (string, error) {
 		}
 		return FormatClaim(r), nil
 	case "heartbeat":
-		if err := c.Heartbeat(jf.JobID, argStr(a, "note")); err != nil {
-			return "", err
-		}
-		return "Checked in. Your claims stay active.", nil
+		return CheckIn(c, jf, ws, argStr(a, "note"))
 	case "submit":
 		return SubmitWork(c, jf, ws, argStr(a, "summary"))
 	case "get_feedback":
@@ -362,4 +359,36 @@ func SubmitWork(c *client.Client, jf *client.JobFile, ws, summary string) (strin
 		out = "Committed your uncommitted changes. " + out
 	}
 	return out, nil
+}
+
+// CheckIn sends a heartbeat with the workspace's real changes and explains the result.
+func CheckIn(c *client.Client, jf *client.JobFile, ws, note string) (string, error) {
+	files, sha, err := client.Snapshot(ws, jf)
+	if err != nil {
+		files, sha = nil, "" // still check in; detection just won't happen this time
+	}
+	r, err := c.Heartbeat(jf.JobID, note, files, sha)
+	if err != nil {
+		return "", err
+	}
+	return FormatCheckIn(r, len(files)), nil
+}
+
+func FormatCheckIn(r *client.HeartbeatResult, nFiles int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Checked in. %d changed file(s) seen.", nFiles)
+	if len(r.Detected) > 0 {
+		fmt.Fprintf(&b, "\nYou hadn't claimed %s, so Trainyard claimed it for you.", strings.Join(r.Detected, ", "))
+	}
+	for _, o := range r.Overlaps {
+		fmt.Fprintf(&b, "\nHeads-up: %s overlaps %s held by %s (%s, job %s: %s). They've been told.", o.Pattern, o.OtherPattern, o.OtherAgent, o.OtherPerson, o.OtherJob, o.OtherTitle)
+	}
+	for _, l := range r.LineChecks {
+		if l.Conflict {
+			fmt.Fprintf(&b, "\nConflict ahead: your edits and %s's (job %s) change the same lines in %s. Coordinate before going further.", l.OtherAgent, l.OtherJob, strings.Join(l.Files, ", "))
+		} else {
+			fmt.Fprintf(&b, "\nLine check vs %s (job %s): same files, different lines. Your work merges cleanly with theirs.", l.OtherAgent, l.OtherJob)
+		}
+	}
+	return b.String()
 }

@@ -53,6 +53,7 @@ type Job struct {
 	PR            int       `json:"pr"`
 	PRURL         string    `json:"pr_url"`
 	QueueSHA      string    `json:"queue_sha"`
+	WipSHA        string    `json:"wip_sha"` // latest snapshot of the agent's unfinished work`
 	BaseSHA       string    `json:"base_sha"`
 	ChangedFiles  []string  `json:"changed_files"`
 	LastHeartbeat time.Time `json:"last_heartbeat"`
@@ -67,6 +68,7 @@ type Claim struct {
 	Repo      string    `json:"repo"`
 	Pattern   string    `json:"pattern"`
 	Reason    string    `json:"reason"`
+	Source    string    `json:"source"` // "claimed" by the agent, or "detected" from its actual edits
 	CreatedAt time.Time `json:"created_at"`
 	// Filled in by queries that join jobs.
 	Agent     string `json:"agent,omitempty"`
@@ -110,6 +112,9 @@ CREATE INDEX IF NOT EXISTS claims_active ON claims(repo, released_at);
 CREATE TABLE IF NOT EXISTS feedback (
   id INTEGER PRIMARY KEY, job_id TEXT NOT NULL REFERENCES jobs(id), at INTEGER NOT NULL, kind TEXT NOT NULL,
   message TEXT NOT NULL, log TEXT NOT NULL DEFAULT '', read INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS line_checks (
+  a TEXT NOT NULL, b TEXT NOT NULL, sha_a TEXT NOT NULL, sha_b TEXT NOT NULL, conflict INTEGER NOT NULL,
+  files TEXT NOT NULL DEFAULT '[]', at INTEGER NOT NULL, PRIMARY KEY(a, b));
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY, at INTEGER NOT NULL, repo TEXT NOT NULL DEFAULT '', job_id TEXT NOT NULL DEFAULT '',
   kind TEXT NOT NULL, message TEXT NOT NULL);
@@ -123,6 +128,15 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1) // SQLite: one writer; keeps things simple and safe
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("create schema: %w", err)
+	}
+	// Columns added after v0.1.0; older databases get them here.
+	for _, m := range []string{
+		`ALTER TABLE jobs ADD COLUMN wip_sha TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE claims ADD COLUMN source TEXT NOT NULL DEFAULT 'claimed'`,
+	} {
+		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return nil, fmt.Errorf("migrate: %w", err)
+		}
 	}
 	return &Store{db: db}, nil
 }
@@ -185,14 +199,14 @@ func (s *Store) Users() ([]User, error) {
 // ---- Jobs ----
 
 const jobCols = `id, repo, title, agent, agent_tool, agent_model, started_by, branch, state, attempts, note, summary,
- pr, pr_url, queue_sha, base_sha, changed_files, last_heartbeat, state_since, created_at, updated_at`
+ pr, pr_url, queue_sha, wip_sha, base_sha, changed_files, last_heartbeat, state_since, created_at, updated_at`
 
 func scanJob(sc interface{ Scan(...any) error }) (*Job, error) {
 	j := &Job{}
 	var files string
 	var hb, since, ca, ua int64
 	err := sc.Scan(&j.ID, &j.Repo, &j.Title, &j.Agent, &j.AgentTool, &j.AgentModel, &j.StartedBy, &j.Branch, &j.State,
-		&j.Attempts, &j.Note, &j.Summary, &j.PR, &j.PRURL, &j.QueueSHA, &j.BaseSHA, &files, &hb, &since, &ca, &ua)
+		&j.Attempts, &j.Note, &j.Summary, &j.PR, &j.PRURL, &j.QueueSHA, &j.WipSHA, &j.BaseSHA, &files, &hb, &since, &ca, &ua)
 	if err != nil {
 		return nil, err
 	}
@@ -279,9 +293,9 @@ func (s *Store) UpdateJob(j *Job) error {
 		since = t
 	}
 	files, _ := json.Marshal(j.ChangedFiles)
-	_, err = s.db.Exec(`UPDATE jobs SET state=?, attempts=?, note=?, summary=?, pr=?, pr_url=?, queue_sha=?, base_sha=?,
+	_, err = s.db.Exec(`UPDATE jobs SET state=?, attempts=?, note=?, summary=?, pr=?, pr_url=?, queue_sha=?, wip_sha=?, base_sha=?,
 		changed_files=?, last_heartbeat=?, state_since=?, updated_at=? WHERE id=?`,
-		j.State, j.Attempts, j.Note, j.Summary, j.PR, j.PRURL, j.QueueSHA, j.BaseSHA, string(files),
+		j.State, j.Attempts, j.Note, j.Summary, j.PR, j.PRURL, j.QueueSHA, j.WipSHA, j.BaseSHA, string(files),
 		j.LastHeartbeat.UnixMilli(), since, t, j.ID)
 	j.StateSince, j.UpdatedAt = ms(since), ms(t)
 	return err
@@ -297,8 +311,11 @@ func (s *Store) Heartbeat(id, note string) error {
 
 func (s *Store) AddClaim(c *Claim) error {
 	c.CreatedAt = time.Now()
-	res, err := s.db.Exec(`INSERT INTO claims(job_id, repo, pattern, reason, created_at) VALUES(?,?,?,?,?)`,
-		c.JobID, c.Repo, c.Pattern, c.Reason, c.CreatedAt.UnixMilli())
+	if c.Source == "" {
+		c.Source = "claimed"
+	}
+	res, err := s.db.Exec(`INSERT INTO claims(job_id, repo, pattern, reason, source, created_at) VALUES(?,?,?,?,?,?)`,
+		c.JobID, c.Repo, c.Pattern, c.Reason, c.Source, c.CreatedAt.UnixMilli())
 	if err != nil {
 		return err
 	}
@@ -308,7 +325,7 @@ func (s *Store) AddClaim(c *Claim) error {
 
 // ActiveClaims lists unreleased claims; repo "" means every repo.
 func (s *Store) ActiveClaims(repo string) ([]Claim, error) {
-	q := `SELECT c.id, c.job_id, c.repo, c.pattern, c.reason, c.created_at, j.agent, j.started_by, j.title
+	q := `SELECT c.id, c.job_id, c.repo, c.pattern, c.reason, c.source, c.created_at, j.agent, j.started_by, j.title
 	      FROM claims c JOIN jobs j ON j.id=c.job_id WHERE c.released_at IS NULL`
 	var args []any
 	if repo != "" {
@@ -324,7 +341,7 @@ func (s *Store) ActiveClaims(repo string) ([]Claim, error) {
 	for rows.Next() {
 		var c Claim
 		var ca int64
-		if err := rows.Scan(&c.ID, &c.JobID, &c.Repo, &c.Pattern, &c.Reason, &ca, &c.Agent, &c.StartedBy, &c.JobTitle); err != nil {
+		if err := rows.Scan(&c.ID, &c.JobID, &c.Repo, &c.Pattern, &c.Reason, &c.Source, &ca, &c.Agent, &c.StartedBy, &c.JobTitle); err != nil {
 			return nil, err
 		}
 		c.CreatedAt = ms(ca)
@@ -427,4 +444,57 @@ func (s *Store) Events(limit int) ([]Event, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// ---- Line-level checks between two jobs' work ----
+
+// LineCheck is the result of trial-merging two jobs' latest work.
+type LineCheck struct {
+	A, B     string // job ids, A < B
+	ShaA     string
+	ShaB     string
+	Conflict bool
+	Files    []string
+	At       time.Time
+}
+
+func pair(a, b string) (string, string) {
+	if b < a {
+		return b, a
+	}
+	return a, b
+}
+
+func (s *Store) GetLineCheck(a, b string) (*LineCheck, error) {
+	a, b = pair(a, b)
+	lc := &LineCheck{}
+	var files string
+	var at, c int64
+	err := s.db.QueryRow(`SELECT a, b, sha_a, sha_b, conflict, files, at FROM line_checks WHERE a=? AND b=?`, a, b).
+		Scan(&lc.A, &lc.B, &lc.ShaA, &lc.ShaB, &c, &files, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	lc.Conflict, lc.At = c == 1, ms(at)
+	_ = json.Unmarshal([]byte(files), &lc.Files)
+	return lc, nil
+}
+
+// PutLineCheck stores a result; shas are given in the same order as the job ids.
+func (s *Store) PutLineCheck(a, b, shaA, shaB string, conflict bool, files []string) error {
+	if b < a {
+		a, b, shaA, shaB = b, a, shaB, shaA
+	}
+	f, _ := json.Marshal(files)
+	c := 0
+	if conflict {
+		c = 1
+	}
+	_, err := s.db.Exec(`INSERT INTO line_checks(a, b, sha_a, sha_b, conflict, files, at) VALUES(?,?,?,?,?,?,?)
+		ON CONFLICT(a, b) DO UPDATE SET sha_a=excluded.sha_a, sha_b=excluded.sha_b, conflict=excluded.conflict, files=excluded.files, at=excluded.at`,
+		a, b, shaA, shaB, c, string(f), now())
+	return err
 }

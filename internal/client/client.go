@@ -139,8 +139,27 @@ func (c *Client) Release(job string, patterns []string) (int, error) {
 	return r.Released, err
 }
 
-func (c *Client) Heartbeat(job, note string) error {
-	return c.Do("POST", "/api/jobs/"+job+"/heartbeat", map[string]string{"note": note}, nil)
+type LineResult struct {
+	OtherJob   string   `json:"other_job"`
+	OtherAgent string   `json:"other_agent"`
+	Conflict   bool     `json:"conflict"`
+	Files      []string `json:"files"`
+	Changed    bool     `json:"changed"`
+}
+
+type HeartbeatResult struct {
+	State      string       `json:"state"`
+	Detected   []string     `json:"detected"`
+	Overlaps   []Overlap    `json:"overlaps"`
+	LineChecks []LineResult `json:"line_checks"`
+}
+
+// Heartbeat checks in. files and wipSHA (from Snapshot) are optional; when sent,
+// Trainyard claims edited files automatically and checks for conflicting lines.
+func (c *Client) Heartbeat(job, note string, files []string, wipSHA string) (*HeartbeatResult, error) {
+	var r HeartbeatResult
+	err := c.Do("POST", "/api/jobs/"+job+"/heartbeat", map[string]any{"note": note, "files": files, "wip_sha": wipSHA}, &r)
+	return &r, err
 }
 
 func (c *Client) Submit(job, summary string) (*store.Job, error) {

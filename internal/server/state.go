@@ -25,6 +25,10 @@ type OverlapPair struct {
 	AgentB  string `json:"agent_b"`
 	Pattern string `json:"pattern"`
 	Since   time.Time `json:"since"`
+	// Result of trial-merging both jobs' latest work: "", "clean" or "conflict".
+	Lines      string   `json:"lines"`
+	LineFiles  []string `json:"line_files"`
+	LinesAt    time.Time `json:"lines_at"`
 }
 
 type State struct {
@@ -91,7 +95,14 @@ func (s *Server) BuildState(me string) (*State, error) {
 			if a.CreatedAt.After(since) {
 				since = a.CreatedAt
 			}
-			st.Overlaps = append(st.Overlaps, OverlapPair{a.Repo, a.JobID, b.JobID, a.Agent, b.Agent, pat, since})
+			op := OverlapPair{Repo: a.Repo, A: a.JobID, B: b.JobID, AgentA: a.Agent, AgentB: b.Agent, Pattern: pat, Since: since, LineFiles: []string{}}
+			if lc, _ := s.Store.GetLineCheck(a.JobID, b.JobID); lc != nil {
+				op.Lines, op.LinesAt = "clean", lc.At
+				if lc.Conflict {
+					op.Lines, op.LineFiles = "conflict", lc.Files
+				}
+			}
+			st.Overlaps = append(st.Overlaps, op)
 		}
 	}
 	y, m, d := st.Now.Date()

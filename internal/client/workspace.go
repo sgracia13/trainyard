@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -183,4 +184,56 @@ func RemoveWorkspace(ws string) error {
 	}
 	_, err = git(root, "worktree", "remove", "--force", ws)
 	return err
+}
+
+// Snapshot records the workspace's current state, including uncommitted and new files,
+// as a commit on trainyard/wip/<job> without touching the agent's branch, index or files.
+// It returns the files changed since main and the snapshot commit.
+func Snapshot(ws string, jf *JobFile) ([]string, string, error) {
+	idx, err := os.CreateTemp("", "trainyard-index-")
+	if err != nil {
+		return nil, "", err
+	}
+	idx.Close()
+	defer os.Remove(idx.Name())
+	env := append(os.Environ(), "GIT_INDEX_FILE="+idx.Name())
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir, cmd.Env = ws, append(env, gitops.Env...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	if _, err := run("read-tree", "HEAD"); err != nil {
+		return nil, "", err
+	}
+	if _, err := run("add", "-A"); err != nil {
+		return nil, "", err
+	}
+	tree, err := run("write-tree")
+	if err != nil {
+		return nil, "", err
+	}
+	head, err := run("rev-parse", "HEAD")
+	if err != nil {
+		return nil, "", err
+	}
+	sha, err := run("commit-tree", tree, "-p", head, "-m", "Trainyard snapshot of "+jf.JobID)
+	if err != nil {
+		return nil, "", err
+	}
+	base, err := git(ws, "merge-base", "origin/"+jf.Main, sha)
+	if err != nil {
+		return nil, "", err
+	}
+	files, err := git(ws, "diff", "--name-only", base, sha)
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err := git(ws, "push", "-q", "--force", "origin", sha+":refs/heads/trainyard/wip/"+jf.JobID); err != nil {
+		return nil, "", fmt.Errorf("couldn't share the snapshot: %w", err)
+	}
+	return gitops.Lines(files), sha, nil
 }

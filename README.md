@@ -19,10 +19,14 @@ Trainyard coordinates AI coding agents across a team. It tracks which agent is w
 
 1. **Start a job.** `trainyard start "Fix the login bug"` registers the job and makes the agent its own folder: a git worktree on branch `trainyard/job/<id>`, from the latest `main`, with its own port.
 2. **Claim files.** Before editing, the agent claims paths or globs (`src/auth/*`). If another agent's claim overlaps, **both** are told. Claims are a heads-up, not a lock, and expire after 30 quiet minutes.
-3. **Submit.** The agent's work is committed and pushed, then enters the merge queue.
-4. **Merge queue.** The server rebases the work on the latest `main` and adds name-tag trailers (`Agent`, `Agent-Tool`, `Agent-Model`, `Job`, `Started-By`). It runs optional quick checks, pushes `trainyard/queue/<id>`, opens a pull request and sets a `trainyard` commit status.
-5. **Tests.** Your GitHub Actions run on the pull request. If they pass, the `trainyard` check turns green and the PR waits for a human review. If they fail, the job is **sent back** to the agent with the failing log. After 3 failed tries, a person is asked to look.
-6. **Lands.** When the PR is merged, the job's claims are released. Any waiting job that touches the same files is re-tested on top of the new `main`. Jobs that don't touch those files are left alone.
+3. **Check in.** On each check-in (`trainyard heartbeat`, or the agent's `heartbeat` tool), Trainyard looks at what the agent **actually changed**, including uncommitted files:
+   - **Forgotten claims:** files the agent didn't claim are claimed for it automatically, so an agent that skips claiming is still caught.
+   - **Line-by-line check:** where two agents' work overlaps, Trainyard trial-merges their latest snapshots (`git merge-tree`, in memory, nothing is written).
+   - **Result:** it tells both agents either "same file, different lines, merges cleanly" or "conflict ahead in `src/login.txt`", before either one finishes.
+4. **Submit.** The agent's work is committed and pushed, then enters the merge queue.
+5. **Merge queue.** The server rebases the work on the latest `main` and adds name-tag trailers (`Agent`, `Agent-Tool`, `Agent-Model`, `Job`, `Started-By`). It runs optional quick checks, pushes `trainyard/queue/<id>`, opens a pull request and sets a `trainyard` commit status.
+6. **Tests.** Your GitHub Actions run on the pull request. If they pass, the `trainyard` check turns green and the PR waits for a human review. If they fail, the job is **sent back** to the agent with just the failing step of the log. After 3 failed tries, a person is asked to look. Each pull request has **one Trainyard comment that's edited in place** as the job moves, showing the four steps, the try count, the failure, and which agent made the change. There's no comment spam.
+7. **Lands.** When the PR is merged, the job's claims are released. Any waiting job that touches the same files is re-tested on top of the new `main`. Jobs that don't touch those files are left alone.
 
 Trainyard never edits an agent's code itself.
 
@@ -39,6 +43,14 @@ cp trainyard.example.json trainyard.json      # set your repos
 export TRAINYARD_GITHUB_TOKEN=github_pat_...  # see "GitHub token" below
 ./trainyard server --config trainyard.json
 ```
+
+Check the setup before the first run. These checks are read-only:
+
+```sh
+./trainyard doctor --config trainyard.json
+```
+
+It checks the token, push access, the main branch, that CI runs on pull requests, and whether `main` requires the `trainyard` check.
 
 The first start prints an **admin token**. Open the dashboard at `http://localhost:7070` and paste it in.
 
@@ -93,6 +105,7 @@ trainyard start "Fix the login bug" --tool copilot
 cd ../shop-trainyard/j12          # the job's own folder
 trainyard claim src/auth/* --reason "session check"
 # ...the agent works here...
+trainyard heartbeat "halfway"       # checks the real edits against other agents, line by line
 trainyard submit -m "Fix expired session redirect"
 trainyard feedback                 # status, test failures with logs
 trainyard status                   # every job and claim in the repo

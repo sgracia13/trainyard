@@ -260,6 +260,9 @@ func TestFullFlow(t *testing.T) {
 	if failed == nil || !strings.Contains(failed.Log, "FAIL: found BUG") {
 		t.Fatalf("sam should get the failing log: %+v", fb)
 	}
+	if sum := e.fake.Summary(repo, j.PR); !strings.Contains(sum, "Sent back to Agent B") || !strings.Contains(sum, "FAIL: found BUG") {
+		t.Fatalf("summary should show the failure:\n%s", sum)
+	}
 
 	// 4. Maya's PR is merged: landed, claims released.
 	if err := e.fake.Merge(e.ctx, repo, e.job(j1.JobID).PR); err != nil {
@@ -277,6 +280,9 @@ func TestFullFlow(t *testing.T) {
 	e.tick()
 	e.tick()
 	j = e.wantState(j2.JobID, store.Ready)
+	if sum := e.fake.Summary(repo, j.PR); !strings.Contains(sum, "Ready for review") || !strings.Contains(sum, "Agent B") {
+		t.Fatalf("summary comment should say ready:\n%s", sum)
+	}
 	content := run(t, e.srv.workers[repo].DataDirRepo(), "show", j.QueueSHA+":src/login.txt")
 	if !strings.Contains(content, "Sign in to your account") || !strings.Contains(content, "button: Continue") {
 		t.Fatalf("sam's queue commit should include maya's landed change:\n%s", content)
@@ -463,4 +469,71 @@ func TestShutdownDoesNotSendBack(t *testing.T) {
 	cancel()
 	_ = e.srv.TickAll(ctx)
 	e.wantState(j.JobID, store.Queued)
+}
+
+// Agents that forget to claim are still caught, and overlaps are checked line by line.
+func TestDetectedOverlapAndLineCheck(t *testing.T) {
+	e := setup(t)
+	a, wsA := e.start("maya", "Login heading", "Agent C")
+	if _, err := e.client("maya").Claim(a.JobID, []string{"src/login.txt"}, "heading"); err != nil {
+		t.Fatal(err)
+	}
+	e.edit(wsA, "src/login.txt", "title: Log in", "title: Welcome back")
+	if _, err := mcp.CheckIn(e.client("maya"), a, wsA, "heading"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sam's agent never claims anything; it edits a different line of the same file.
+	b, wsB := e.start("sam", "Button label", "Agent B")
+	e.edit(wsB, "src/login.txt", "button: Go", "button: Continue")
+	out, err := mcp.CheckIn(e.client("sam"), b, wsB, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"claimed it for you", "src/login.txt", "merges cleanly"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("check-in output missing %q:\n%s", want, out)
+		}
+	}
+	cl, _ := e.srv.Store.ActiveClaims(repo)
+	var detected bool
+	for _, c := range cl {
+		if c.JobID == b.JobID && c.Source == "detected" && c.Pattern == "src/login.txt" {
+			detected = true
+		}
+	}
+	if !detected {
+		t.Fatalf("expected a detected claim: %+v", cl)
+	}
+	fb, _ := e.client("maya").Feedback(a.JobID)
+	if len(fb.Feedback) == 0 || !strings.Contains(fb.Feedback[0].Message, "is editing src/login.txt") {
+		t.Fatalf("maya should hear about sam's unclaimed edit: %+v", fb)
+	}
+
+	// A third agent changes the same line as Maya's: conflict predicted for both.
+	c, wsC := e.start("maya", "Heading again", "Agent D")
+	e.edit(wsC, "src/login.txt", "title: Log in", "title: Hello")
+	out, err = mcp.CheckIn(e.client("maya"), c, wsC, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Conflict ahead") || !strings.Contains(out, "Agent C") {
+		t.Fatalf("expected a predicted conflict with Agent C:\n%s", out)
+	}
+	fb, _ = e.client("maya").Feedback(a.JobID)
+	var warned bool
+	for _, f := range fb.Feedback {
+		if f.Kind == "conflict_ahead" && strings.Contains(f.Message, "Agent D") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("Agent C should be warned about Agent D: %+v", fb)
+	}
+	// Checking in again without changes doesn't repeat the warning.
+	_, _ = mcp.CheckIn(e.client("maya"), c, wsC, "")
+	fb, _ = e.client("maya").Feedback(a.JobID)
+	if len(fb.Feedback) != 0 {
+		t.Fatalf("no repeat warnings expected: %+v", fb)
+	}
 }

@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sgracia13/trainyard/internal/claims"
@@ -50,6 +51,7 @@ func (r *RepoConfig) Defaults() {
 }
 
 type Worker struct {
+	mu sync.Mutex // one git operation at a time in the working clone
 	Repo      RepoConfig
 	Store     *store.Store
 	Host      host.Host
@@ -81,6 +83,8 @@ func QueueBranch(jobID string) string { return "trainyard/queue/" + jobID }
 
 // Tick does one pass over the repo. It is safe to call repeatedly.
 func (w *Worker) Tick(ctx context.Context) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.expireClaims()
 	if err := w.sync(ctx); err != nil {
 		return fmt.Errorf("sync %s: %w", w.Repo.Name, err)
@@ -210,14 +214,13 @@ func (w *Worker) prepare(ctx context.Context, j *store.Job) error {
 		if err := w.Host.AddLabels(ctx, j.Repo, num, []string{"trainyard", "agent: " + j.Agent}); err != nil {
 			log.Printf("labels %s#%d: %v (continuing)", j.Repo, num, err)
 		}
-	} else {
-		_ = w.Host.Comment(ctx, j.Repo, num, fmt.Sprintf("Trainyard: attempt %d — re-tested on top of the latest `%s` (%s).", j.Attempts+1, w.Repo.Main, short(sha)))
 	}
 	w.setStatus(ctx, j, sha, "pending", "Testing on top of the latest "+w.Repo.Main)
 	j.State, j.PR, j.PRURL, j.QueueSHA, j.BaseSHA, j.ChangedFiles = store.Testing, num, url, sha, base, gitops.Lines(changed)
 	if err := w.Store.UpdateJob(j); err != nil {
 		return err
 	}
+	w.summary(ctx, j, 0, "", "")
 	w.Store.Log(j.Repo, j.ID, "testing", fmt.Sprintf("%s: on top of latest %s, tests running (PR #%d)", j.Title, w.Repo.Main, num))
 	return nil
 }
@@ -277,6 +280,7 @@ func (w *Worker) pass(ctx context.Context, j *store.Job, desc string) error {
 	if err := w.Store.UpdateJob(j); err != nil {
 		return err
 	}
+	w.summary(ctx, j, 0, "", "")
 	w.Store.Log(j.Repo, j.ID, "ready", fmt.Sprintf("%s passed. Ready for review (PR #%d)", j.Title, j.PR))
 	return nil
 }
@@ -306,15 +310,15 @@ func (w *Worker) sendBack(ctx context.Context, j *store.Job, kind, msg, logText 
 	if j.QueueSHA != "" && j.State != store.Working {
 		w.setStatus(ctx, j, j.QueueSHA, "failure", desc)
 	}
-	if j.PR > 0 && countsAsTry {
-		body := "Trainyard: " + desc + ".\n\n" + msg
-		if logText != "" {
-			body += "\n\n<details><summary>Log</summary>\n\n```\n" + host.TailLog(logText, 60) + "\n```\n</details>"
-		}
-		_ = w.Host.Comment(ctx, j.Repo, j.PR, body)
-	}
 	if err := w.Store.UpdateJob(j); err != nil {
 		return err
+	}
+	if j.PR > 0 && countsAsTry {
+		failedStep := map[string]int{"conflict": 1, "check_failed": 2}[kind]
+		if failedStep == 0 {
+			failedStep = 3
+		}
+		w.summary(ctx, j, failedStep, msg, logText)
 	}
 	w.Store.Log(j.Repo, j.ID, j.State, j.Title+": "+desc+". "+firstLine(msg))
 	return nil
@@ -337,6 +341,7 @@ func (w *Worker) checkPR(ctx context.Context, j *store.Job) error {
 			return err
 		}
 		_, _ = w.Store.ReleaseClaims(j.ID, nil)
+		w.summary(ctx, j, 0, "", "")
 		w.Store.Log(j.Repo, j.ID, "landed", fmt.Sprintf("%s landed on %s (PR #%d)", j.Title, w.Repo.Main, j.PR))
 		return nil
 	case st.Closed:
@@ -433,3 +438,89 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 func firstLine(s string) string { return strings.SplitN(strings.TrimSpace(s), "\n", 2)[0] }
 
 var ErrNoRepo = errors.New("repo not configured")
+
+// TrialMerge merges two commits in memory (git merge-tree, nothing is written to any
+// branch) and reports whether they'd conflict, and in which files.
+func (w *Worker) TrialMerge(ctx context.Context, a, b string) (bool, []string, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if _, err := os.Stat(filepath.Join(w.dir(), ".git")); err != nil {
+		if err := w.sync(ctx); err != nil {
+			return false, nil, err
+		}
+	}
+	for _, sha := range []string{a, b} {
+		if _, err := w.git(ctx, "cat-file", "-e", sha+"^{commit}"); err != nil {
+			if _, err := w.git(ctx, "fetch", "-q", "origin", "+refs/heads/trainyard/*:refs/remotes/origin/trainyard/*"); err != nil {
+				return false, nil, err
+			}
+			break
+		}
+	}
+	out, err := w.git(ctx, "merge-tree", "--write-tree", "--name-only", "--no-messages", a, b)
+	if err == nil {
+		return false, nil, nil
+	}
+	var ge *gitops.Error
+	if errors.As(err, &ge) && strings.Contains(ge.Err.Error(), "exit status 1") {
+		lines := gitops.Lines(out)
+		if len(lines) > 1 {
+			return true, lines[1:], nil // first line is the tree id
+		}
+		return true, nil, nil
+	}
+	return false, nil, err
+}
+
+const summaryMarker = "<!-- trainyard:summary -->"
+
+// summary keeps one comment on the PR up to date with where the job stands.
+// failedStep is 1-3 when a step failed (msg and logText explain it), else 0.
+func (w *Worker) summary(ctx context.Context, j *store.Job, failedStep int, msg, logText string) {
+	if j.PR == 0 {
+		return
+	}
+	ok, fail, wait, run := "✅ Passed", "❌ Failed", "· Waiting", "⏳ Running"
+	quick := ok
+	if w.Repo.QuickCheck == "" {
+		quick = "— Not set up"
+	}
+	steps := [4]string{ok, quick, ok, ok}
+	var headline string
+	switch {
+	case j.State == store.Landed:
+		headline = "**Landed on `" + w.Repo.Main + "`.** Claims released."
+		steps[3] = "✅ Merged"
+	case failedStep > 0:
+		for i := failedStep - 1; i < 4; i++ {
+			steps[i] = wait
+		}
+		steps[failedStep-1] = fail
+		headline = fmt.Sprintf("**Sent back to %s** (try %d of %d). The agent has the details below and is fixing it.", j.Agent, j.Attempts, w.Repo.MaxAttempts)
+		if j.State == store.NeedsPerson {
+			headline = fmt.Sprintf("**Needs a person.** Failed %d times; the agent has stopped.", j.Attempts)
+		}
+	case j.State == store.Testing:
+		steps[2], steps[3] = run, wait
+		headline = "**Testing** on top of the latest `" + w.Repo.Main + "`."
+	case j.State == store.Ready:
+		steps[3] = "👀 Waiting for review"
+		headline = "**Ready for review.** Tested on top of the latest `" + w.Repo.Main + "`."
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n### Trainyard\n\n%s\n\n", summaryMarker, headline)
+	fmt.Fprintf(&b, "| Step | |\n|---|---|\n| 1 · Update: on top of latest `%s` (`%s`) | %s |\n| 2 · Quick checks | %s |\n| 3 · Tests (CI) | %s |\n| 4 · Review | %s |\n\n",
+		w.Repo.Main, short(j.BaseSHA), steps[0], steps[1], steps[2], steps[3])
+	if failedStep > 0 && msg != "" {
+		fmt.Fprintf(&b, "%s\n\n", msg)
+		if logText != "" {
+			fmt.Fprintf(&b, "<details><summary>What the agent was sent</summary>\n\n```\n%s\n```\n</details>\n\n", host.TailLog(logText, 60))
+		}
+	}
+	fmt.Fprintf(&b, "**Agent** %s (%s, %s) · **started by** %s · **job** `%s` · **tries** %d of %d\n\n",
+		j.Agent, orDash(j.AgentTool), orDash(j.AgentModel), j.StartedBy, j.ID, max(j.Attempts, 1), w.Repo.MaxAttempts)
+	fmt.Fprintf(&b, "<sub>Updated %s. This comment is edited in place as the job moves.</sub>", w.now().UTC().Format("Jan 2, 15:04 MST"))
+	if err := w.Host.UpsertComment(ctx, j.Repo, j.PR, summaryMarker, b.String()); err != nil {
+		log.Printf("summary comment %s#%d: %v", j.Repo, j.PR, err)
+	}
+}

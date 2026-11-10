@@ -47,6 +47,8 @@ func main() {
 		err = runServer(args)
 	case "admin":
 		err = runAdmin(args)
+	case "doctor":
+		err = runDoctor(args)
 	case "login":
 		err = runLogin(args)
 	case "start":
@@ -60,8 +62,12 @@ func main() {
 			return err
 		})
 	case "heartbeat":
-		err = withJob(func(c *client.Client, jf *client.JobFile, _ string) error {
-			return c.Heartbeat(jf.JobID, strings.Join(args, " "))
+		err = withJob(func(c *client.Client, jf *client.JobFile, ws string) error {
+			out, err := mcp.CheckIn(c, jf, ws, strings.Join(args, " "))
+			if err == nil {
+				fmt.Println(out)
+			}
+			return err
 		})
 	case "submit":
 		err = runSubmit(args)
@@ -107,6 +113,7 @@ func usage() {
 Server:
   trainyard server --config trainyard.json
   trainyard admin add-user NAME [--config trainyard.json]
+  trainyard doctor [--config trainyard.json]   check the setup (read-only)
 
 Developers and agents:
   trainyard login --server URL --token TOKEN
@@ -167,6 +174,53 @@ func runServer(args []string) error {
 	log.Printf("Trainyard %s: dashboard at %s, watching %s", version, cfg.PublicURL, repoNames(cfg))
 	if err := hs.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
+	}
+	return nil
+}
+
+func runDoctor(args []string) error {
+	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	cfgPath := fs.String("config", "trainyard.json", "config file")
+	fs.Parse(args)
+	mark := map[string]string{"ok": "✓", "warn": "!", "fail": "✗"}
+	problems, warnings := 0, 0
+	show := func(c host.Check) {
+		fmt.Printf("  %s %s\n", mark[c.Level], c.Text)
+		switch c.Level {
+		case "fail":
+			problems++
+		case "warn":
+			warnings++
+		}
+	}
+	cfg, st, err := openFromConfig(*cfgPath)
+	if err != nil {
+		return err
+	}
+	st.Close()
+	fmt.Printf("Trainyard server (%s)\n", *cfgPath)
+	show(host.Check{Level: "ok", Text: "Config is valid; database opens in " + cfg.DataDir})
+	token := os.Getenv(cfg.GitHub.TokenEnv)
+	if token == "" {
+		show(host.Check{Level: "fail", Text: cfg.GitHub.TokenEnv + " isn't set"})
+		return fmt.Errorf("%d problem(s)", problems)
+	}
+	show(host.Check{Level: "ok", Text: cfg.GitHub.TokenEnv + " is set"})
+	g := host.NewGitHub(cfg.GitHub.APIURL, cfg.GitHub.WebURL, token)
+	for _, r := range cfg.Repos {
+		fmt.Printf("\n%s\n", r.Name)
+		for _, c := range g.Doctor(context.Background(), r.Name, r.Main) {
+			show(c)
+		}
+	}
+	fmt.Println()
+	switch {
+	case problems > 0:
+		return fmt.Errorf("%d problem(s) to fix before Trainyard can run", problems)
+	case warnings > 0:
+		fmt.Printf("Ready, with %d recommendation(s).\n", warnings)
+	default:
+		fmt.Println("Ready.")
 	}
 	return nil
 }
